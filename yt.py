@@ -3,6 +3,8 @@ import re
 from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
 import os
+import time
+from functools import wraps
 
 # Configure Gemini API
 api_key = os.getenv('GEMINI_API_KEY', "AIzaSyAL-dytEp5xgyB3TpwvXijz4xXXoBNjXTQ")  # Use environment variable in production
@@ -11,18 +13,60 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 
 app = Flask(__name__)
 
+# Rate limiting decorator
+def rate_limited(max_per_second):
+    min_interval = 1.0 / float(max_per_second)
+    def decorator(func):
+        last_time_called = [0.0]
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            elapsed = time.time() - last_time_called[0]
+            left_to_wait = min_interval - elapsed
+            if left_to_wait > 0:
+                time.sleep(left_to_wait)
+            ret = func(*args, **kwargs)
+            last_time_called[0] = time.time()
+            return ret
+        return wrapper
+    return decorator
+
 def extract_video_id(youtube_url):
     """Extracts the YouTube video ID."""
     match = re.search(r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})", youtube_url)
     return match.group(1) if match else None
 
+@rate_limited(1)  # Limit to 1 request per second
 def get_transcript(video_id):
-    """Fetches the YouTube transcript."""
+    """Fetches the YouTube transcript with rate limiting and better error handling."""
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join([t['text'] for t in transcript])
+        # First try to get English transcript
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+        except:
+            # If English not available, try auto-generated transcript
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        # Join transcript texts with proper spacing and punctuation
+        text_parts = []
+        for t in transcript:
+            text = t['text'].strip()
+            if text:
+                # Add period if the text doesn't end with punctuation
+                if not text[-1] in '.!?':
+                    text += '.'
+                text_parts.append(text)
+        
+        return ' '.join(text_parts)
     except Exception as e:
-        return f"Error fetching transcript: {e}"
+        error_msg = str(e)
+        if "Too Many Requests" in error_msg:
+            return "Error: YouTube is rate limiting requests. Please try again in a few minutes."
+        elif "TranscriptsDisabled" in error_msg:
+            return "Error: This video does not have captions/transcripts enabled."
+        elif "NoTranscriptFound" in error_msg:
+            return "Error: No transcript found for this video. It might not have captions available."
+        else:
+            return f"Error fetching transcript: {error_msg}"
 
 def format_prompt(transcript, style):
     """Formats the prompt for Gemini."""

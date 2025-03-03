@@ -6,19 +6,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const notesOutput = document.getElementById('notes-output');
     const copyBtn = document.getElementById('copy-btn');
 
+    let isGenerating = false;
+
     generateBtn.addEventListener('click', async () => {
+        if (isGenerating) return;
+
         const youtubeUrl = youtubeUrlInput.value.trim();
         const style = notesStyleSelect.value;
 
         if (!youtubeUrl) {
-            alert('Please enter a YouTube URL');
+            showError('Please enter a YouTube URL');
             return;
         }
 
         // Show loader and hide previous notes
+        isGenerating = true;
         loader.style.display = 'block';
-        notesOutput.innerHTML = '';
         generateBtn.disabled = true;
+        generateBtn.textContent = 'Generating...';
+        notesOutput.innerHTML = '';
 
         try {
             const response = await fetch('/generate_notes', {
@@ -35,24 +41,36 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             if (response.ok) {
-                // Convert markdown to HTML (basic conversion)
-                const formattedNotes = data.notes
-                    .replace(/\n/g, '<br>')
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                    .replace(/^- (.*)/gm, '• $1');
+                if (data.notes.startsWith('Error:')) {
+                    showError(data.notes);
+                } else {
+                    // Convert markdown to HTML (basic conversion)
+                    const formattedNotes = data.notes
+                        .replace(/\n/g, '<br>')
+                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                        .replace(/^- (.*)/gm, '• $1');
 
-                notesOutput.innerHTML = formattedNotes;
+                    notesOutput.innerHTML = formattedNotes;
+                    copyBtn.style.display = 'block';
+                }
             } else {
                 throw new Error(data.error || 'Failed to generate notes');
             }
         } catch (error) {
-            notesOutput.innerHTML = `<div class="error-message">${error.message}</div>`;
+            showError(error.message);
         } finally {
             loader.style.display = 'none';
             generateBtn.disabled = false;
+            generateBtn.textContent = 'Generate Notes';
+            isGenerating = false;
         }
     });
+
+    function showError(message) {
+        notesOutput.innerHTML = `<div class="error-message">${message}</div>`;
+        copyBtn.style.display = 'none';
+    }
 
     copyBtn.addEventListener('click', () => {
         const notesText = notesOutput.innerText;
@@ -68,24 +86,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                 .catch(err => {
                     console.error('Failed to copy text:', err);
-                    alert('Failed to copy text to clipboard');
+                    showError('Failed to copy text to clipboard');
                 });
         }
     });
 
     // Add input validation and URL formatting
-    youtubeUrlInput.addEventListener('paste', (e) => {
-        // Allow paste event to complete
-        setTimeout(() => {
-            const url = youtubeUrlInput.value;
-            // Basic YouTube URL validation
-            if (url.includes('youtube.com/watch?v=') || url.includes('youtu.be/')) {
-                youtubeUrlInput.classList.add('valid');
-                youtubeUrlInput.classList.remove('invalid');
-            } else {
-                youtubeUrlInput.classList.add('invalid');
-                youtubeUrlInput.classList.remove('valid');
-            }
-        }, 0);
+    youtubeUrlInput.addEventListener('input', (e) => {
+        const url = e.target.value.trim();
+        if (url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)) {
+            youtubeUrlInput.classList.add('valid');
+            youtubeUrlInput.classList.remove('invalid');
+        } else if (url) {
+            youtubeUrlInput.classList.add('invalid');
+            youtubeUrlInput.classList.remove('valid');
+        } else {
+            youtubeUrlInput.classList.remove('valid', 'invalid');
+        }
     });
 }); 
