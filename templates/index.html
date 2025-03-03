@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="Transform YouTube videos into structured notes using AI">
+    <title>YouTube Notes Generator | AI-Powered Notes</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>YouTube Notes Generator</h1>
+            <p>Transform any video into structured notes with AI</p>
+        </header>
+
+        <main>
+            <div class="input-section glass-effect">
+                <div class="url-input">
+                    <input type="text" id="youtube-url" placeholder="Paste YouTube URL here..." autocomplete="off">
+                </div>
+                
+                <div class="style-selector">
+                    <select id="notes-style">
+                        <option value="concise">⚡ Concise Notes</option>
+                        <option value="detailed">📝 Detailed Notes</option>
+                        <option value="key_points">🎯 Key Points</option>
+                    </select>
+                </div>
+
+                <button id="generate-btn">Generate Notes</button>
+            </div>
+
+            <div class="loader" id="loader">
+                <div class="spinner"></div>
+                <p>Generating your notes...</p>
+            </div>
+
+            <div class="output-section glass-effect">
+                <div class="notes-container" id="notes-output">
+                    <div class="placeholder-text">
+                        Your generated notes will appear here...
+                    </div>
+                </div>
+                <button id="copy-btn" class="copy-button">Copy Notes</button>
+            </div>
+        </main>
+
+        <footer>
+            <p>Made with ❤️ using Flask and Gemini AI</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html> 
