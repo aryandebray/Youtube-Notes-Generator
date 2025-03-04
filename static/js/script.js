@@ -5,8 +5,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const loader = document.getElementById('loader');
     const notesOutput = document.getElementById('notes-output');
     const copyBtn = document.getElementById('copy-btn');
+    const downloadBtn = document.getElementById('download-btn');
 
     let isGenerating = false;
+    let currentNotes = '';
 
     generateBtn.addEventListener('click', async () => {
         if (isGenerating) return;
@@ -25,6 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
         generateBtn.disabled = true;
         generateBtn.textContent = 'Generating...';
         notesOutput.innerHTML = '';
+        copyBtn.style.display = 'none';
+        downloadBtn.style.display = 'none';
 
         try {
             const response = await fetch('/generate_notes', {
@@ -44,15 +48,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.notes.startsWith('Error:')) {
                     showError(data.notes);
                 } else {
-                    // Convert markdown to HTML (basic conversion)
+                    // Store the original notes
+                    currentNotes = data.notes;
+                    
+                    // Format notes for display (remove markdown ** and add HTML formatting)
                     const formattedNotes = data.notes
-                        .replace(/\n/g, '<br>')
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                        .replace(/^- (.*)/gm, '• $1');
+                        .replace(/\*\*(.*?)\*\*/g, '$1')  // Remove bold markdown
+                        .replace(/\*(.*?)\*/g, '$1')      // Remove italic markdown
+                        .replace(/\n/g, '<br>')           // Convert newlines to <br>
+                        .replace(/^- (.*)/gm, '• $1');    // Convert markdown lists to bullet points
 
                     notesOutput.innerHTML = formattedNotes;
                     copyBtn.style.display = 'block';
+                    downloadBtn.style.display = 'block';
                 }
             } else {
                 throw new Error(data.error || 'Failed to generate notes');
@@ -70,18 +78,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function showError(message) {
         notesOutput.innerHTML = `<div class="error-message">${message}</div>`;
         copyBtn.style.display = 'none';
+        downloadBtn.style.display = 'none';
+        currentNotes = '';
     }
 
     copyBtn.addEventListener('click', () => {
-        const notesText = notesOutput.innerText;
-        
-        if (notesText && !notesText.includes('Your generated notes will appear here...')) {
-            navigator.clipboard.writeText(notesText)
+        if (currentNotes) {
+            navigator.clipboard.writeText(currentNotes)
                 .then(() => {
                     const originalText = copyBtn.textContent;
                     copyBtn.textContent = 'Copied!';
+                    copyBtn.classList.add('success');
                     setTimeout(() => {
                         copyBtn.textContent = originalText;
+                        copyBtn.classList.remove('success');
                     }, 2000);
                 })
                 .catch(err => {
@@ -91,7 +101,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Add input validation and URL formatting
+    downloadBtn.addEventListener('click', () => {
+        if (currentNotes) {
+            // Create a blob with the notes
+            const blob = new Blob([currentNotes], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            
+            // Create a temporary link and click it
+            const a = document.createElement('a');
+            const videoId = youtubeUrlInput.value.match(/(?:v=|\/)([\w-]{11})(?:\?|$|&)/)?.[1] || 'notes';
+            a.href = url;
+            a.download = `youtube_notes_${videoId}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            
+            // Cleanup
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            // Show feedback
+            downloadBtn.classList.add('success');
+            setTimeout(() => {
+                downloadBtn.classList.remove('success');
+            }, 2000);
+        }
+    });
+
+    // Add input validation
     youtubeUrlInput.addEventListener('input', (e) => {
         const url = e.target.value.trim();
         if (url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)) {

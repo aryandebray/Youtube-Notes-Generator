@@ -5,105 +5,78 @@ import google.generativeai as genai
 import os
 import time
 from functools import wraps
-from pytube import YouTube
-import requests
-from bs4 import BeautifulSoup
-import random
 
 # Configure Gemini API
-api_key = os.getenv('GEMINI_API_KEY', "AIzaSyAL-dytEp5xgyB3TpwvXijz4xXXoBNjXTQ")
+api_key = os.getenv('GEMINI_API_KEY', "AIzaSyAL-dytEp5xgyB3TpwvXijz4xXXoBNjXTQ")  # Use environment variable in production
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 app = Flask(__name__)
 
-# List of user agents to rotate
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-]
-
-def get_random_headers():
-    """Generate random headers to avoid detection."""
-    return {
-        'User-Agent': random.choice(USER_AGENTS),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-    }
+# Rate limiting decorator
+def rate_limited(max_per_second):
+    min_interval = 1.0 / float(max_per_second)
+    def decorator(func):
+        last_time_called = [0.0]
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            elapsed = time.time() - last_time_called[0]
+            left_to_wait = min_interval - elapsed
+            if left_to_wait > 0:
+                time.sleep(left_to_wait)
+            ret = func(*args, **kwargs)
+            last_time_called[0] = time.time()
+            return ret
+        return wrapper
+    return decorator
 
 def extract_video_id(youtube_url):
     """Extracts the YouTube video ID."""
     match = re.search(r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})", youtube_url)
     return match.group(1) if match else None
 
-def get_transcript_method1(video_id):
-    """Method 1: Using youtube_transcript_api."""
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        return ' '.join([t['text'] for t in transcript])
-    except Exception as e:
-        return None
-
-def get_transcript_method2(video_id):
-    """Method 2: Using pytube."""
-    try:
-        yt = YouTube(f'https://www.youtube.com/watch?v={video_id}')
-        captions = yt.captions.get_by_language_code('en')
-        if not captions:
-            captions = yt.captions.all()[0]  # Get first available caption if English not available
-        return captions.generate_srt_captions()
-    except Exception as e:
-        return None
-
-def get_transcript_method3(video_id):
-    """Method 3: Using direct HTTP request with rotating user agents."""
-    try:
-        url = f'https://www.youtube.com/watch?v={video_id}'
-        headers = get_random_headers()
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Try to find caption tracks in the page source
-        scripts = soup.find_all('script')
-        for script in scripts:
-            if 'captionTracks' in str(script):
-                return "Captions available but require authentication"
-        return None
-    except Exception as e:
-        return None
-
+@rate_limited(1)  # Limit to 1 request per second
 def get_transcript(video_id):
-    """Try multiple methods to get the transcript."""
-    # Add delay between attempts
-    time.sleep(1)
-    
-    # Try method 1 (youtube_transcript_api)
-    transcript = get_transcript_method1(video_id)
-    if transcript:
-        return transcript
-    
-    # Try method 2 (pytube)
-    transcript = get_transcript_method2(video_id)
-    if transcript:
-        return transcript
-    
-    # Try method 3 (direct request)
-    transcript = get_transcript_method3(video_id)
-    if transcript:
-        return transcript
-    
-    return "Error: Unable to fetch transcript. This could be due to:\n1. No captions available\n2. Video is private or age-restricted\n3. YouTube API restrictions"
+    """Fetches the YouTube transcript with rate limiting and better error handling."""
+    try:
+        # First try to get English transcript
+        
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+        except:
+            # If English not available, try auto-generated transcript
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        
+        # Join transcript texts with proper spacing and punctuation
+        text_parts = []
+        for t in transcript:
+            text = t['text'].strip()
+            if text:
+                # Add period if the text doesn't end with punctuation
+                if not text[-1] in '.!?':
+                    text += '.'
+                text_parts.append(text)
+        
+        return ' '.join(text_parts)
+    except Exception as e:
+        error_msg = str(e)
+        if "Too Many Requests" in error_msg:
+            return "Error: YouTube is rate limiting requests. Please try again in a few minutes."
+        elif "TranscriptsDisabled" in error_msg:
+            return "Error: This video does not have captions/transcripts enabled."
+        elif "NoTranscriptFound" in error_msg:
+            return "Error: No transcript found for this video. It might not have captions available."
+        else:
+            return f"Error fetching transcript: {error_msg}"
 
 def format_prompt(transcript, style):
     """Formats the prompt for Gemini."""
     prompt_prefix = """Generate structured lecture notes from the following transcript:
 
-- Format the notes into sections with bullet points.
-- Use clear headings and subheadings.
-- Summarize key concepts, definitions, and examples.
+- Use plain text formatting (no markdown, no special characters)
+- Create clear sections with plain text headings
+- Use simple bullet points (just a dash or dot)
+- Keep the formatting minimal and clean
 """
     prompt_suffix = {
         "concise": "- Keep the notes brief and to the point.",
@@ -140,7 +113,7 @@ def generate():
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
     transcript = get_transcript(video_id)
-    if transcript.startswith("Error"):
+    if "Error" in transcript:
         return jsonify({"error": transcript}), 400
     
     notes = generate_notes(transcript, style)

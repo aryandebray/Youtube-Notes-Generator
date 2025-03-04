@@ -250,4 +250,42 @@ footer p {
     .input-section, .output-section {
         padding: 1rem;
     }
+}
+
+.button-group {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.action-button {
+    flex: 1;
+    padding: 0.8rem;
+    background: var(--primary-blue);
+    color: var(--text-primary);
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.action-button:hover {
+    background: var(--secondary-blue);
+    box-shadow: 0 0 20px var(--glow-color);
+    transform: translateY(-2px);
+}
+
+.action-button.success {
+    background: #00b894;
+}
+
+.copy-button {
+    display: none;
+}
+
+#download-btn {
+    display: none;
 } 
