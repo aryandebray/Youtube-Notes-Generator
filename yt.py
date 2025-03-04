@@ -4,10 +4,17 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
 import os
 import time
+import json
+import yt_dlp
+from dotenv import load_dotenv
+import tempfile
 from functools import wraps
 
+# Load environment variables
+load_dotenv()
+
 # Configure Gemini API
-api_key = os.getenv('GEMINI_API_KEY', "AIzaSyAL-dytEp5xgyB3TpwvXijz4xXXoBNjXTQ")  # Use environment variable in production
+api_key = os.getenv('GEMINI_API_KEY', "AIzaSyAL-dytEp5xgyB3TpwvXijz4xXXoBNjXTQ")
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
@@ -35,39 +42,84 @@ def extract_video_id(youtube_url):
     match = re.search(r"(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})", youtube_url)
     return match.group(1) if match else None
 
-@rate_limited(1)  # Limit to 1 request per second
-def get_transcript(video_id):
-    """Fetches the YouTube transcript with rate limiting and better error handling."""
+def get_transcript_ytdlp(video_id):
+    """Get transcript using yt-dlp."""
     try:
-        # First try to get English transcript
+        url = f'https://www.youtube.com/watch?v={video_id}'
         
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-        except:
-            # If English not available, try auto-generated transcript
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        
-        # Join transcript texts with proper spacing and punctuation
-        text_parts = []
-        for t in transcript:
-            text = t['text'].strip()
-            if text:
-                # Add period if the text doesn't end with punctuation
-                if not text[-1] in '.!?':
-                    text += '.'
-                text_parts.append(text)
-        
-        return ' '.join(text_parts)
+        # Configure yt-dlp
+        ydl_opts = {
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['en'],
+            'skip_download': True,
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+        }
+
+        # Create a temporary directory for subtitle files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts['paths'] = {'home': temp_dir}
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    # Try to get video info and subtitles
+                    info = ydl.extract_info(url, download=False)
+                    
+                    # Check if subtitles are available
+                    if info.get('subtitles') or info.get('automatic_captions'):
+                        # Download subtitles
+                        ydl_opts['writesubtitles'] = True
+                        ydl_opts['writeautomaticsub'] = True
+                        ydl.download([url])
+                        
+                        # Look for the subtitle file in the temp directory
+                        for file in os.listdir(temp_dir):
+                            if file.endswith('.en.vtt'):
+                                with open(os.path.join(temp_dir, file), 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                    # Clean up the VTT content
+                                    lines = []
+                                    for line in content.split('\n'):
+                                        if not any(x in line.lower() for x in ['webvtt', '-->', '<c>', '</c>', ':', 'align', 'position']):
+                                            if line.strip():
+                                                lines.append(line.strip())
+                                    return ' '.join(lines)
+                    
+                    return None
+                except Exception as e:
+                    print(f"yt-dlp error: {str(e)}")
+                    return None
     except Exception as e:
-        error_msg = str(e)
-        if "Too Many Requests" in error_msg:
-            return "Error: YouTube is rate limiting requests. Please try again in a few minutes."
-        elif "TranscriptsDisabled" in error_msg:
-            return "Error: This video does not have captions/transcripts enabled."
-        elif "NoTranscriptFound" in error_msg:
-            return "Error: No transcript found for this video. It might not have captions available."
-        else:
-            return f"Error fetching transcript: {error_msg}"
+        print(f"Error in get_transcript_ytdlp: {str(e)}")
+        return None
+
+def get_transcript_api(video_id):
+    """Get transcript using youtube_transcript_api."""
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+        return ' '.join([t['text'] for t in transcript])
+    except Exception as e:
+        print(f"API error: {str(e)}")
+        return None
+
+def get_transcript(video_id):
+    """Try multiple methods to get the transcript."""
+    # Add delay to respect rate limits
+    time.sleep(1)
+    
+    # Try yt-dlp first (more reliable)
+    transcript = get_transcript_ytdlp(video_id)
+    if transcript:
+        return transcript
+    
+    # Try youtube_transcript_api as fallback
+    transcript = get_transcript_api(video_id)
+    if transcript:
+        return transcript
+    
+    return "Error: Unable to fetch transcript. This could be due to:\n1. No captions available\n2. Video is private or age-restricted\n3. Try again in a few minutes"
 
 def format_prompt(transcript, style):
     """Formats the prompt for Gemini."""
@@ -113,7 +165,7 @@ def generate():
         return jsonify({"error": "Invalid YouTube URL."}), 400
     
     transcript = get_transcript(video_id)
-    if "Error" in transcript:
+    if transcript.startswith("Error"):
         return jsonify({"error": transcript}), 400
     
     notes = generate_notes(transcript, style)
